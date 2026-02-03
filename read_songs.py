@@ -7,30 +7,17 @@ import mysql.connector
 from mysql.connector import Error
 import csv
 import argparse
-
-# Database connection constants
-DB_HOST = 'localhost'
-DB_USER = 'jbadmin'
-DB_PASSWORD = 'jbadmin'
-DB_NAME = 'jukebox'
-
-# Query parameters
-DEFAULT_YEAR = 2023
-DEFAULT_OUTPUT_FILE = 'songs_output.csv'
-
-# Year validation constants
-MIN_YEAR = 1900
-MAX_YEAR = 2100
+from config import DATABASE, MIN_YEAR, MAX_YEAR
 
 
 def connect_to_database():
     """Establish connection to the MySQL database."""
     try:
         connection = mysql.connector.connect(
-            host=DB_HOST,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            database=DB_NAME
+            host=DATABASE['host'],
+            user=DATABASE['user'],
+            password=DATABASE['password'],
+            database=DATABASE['name']
         )
         return connection
     except Error as err:
@@ -134,7 +121,7 @@ def main():
     """Main function."""
     parser = argparse.ArgumentParser(description="Read songs from the jukebox database")
     parser.add_argument("--year", "-y", type=int, default=None,
-                        help=f"Year to filter songs (default: None)")
+                        help=f"Year to filter songs (optional)")
     parser.add_argument("--output", "-o", default=None,
                         help="CSV output file path (optional)")
     args = parser.parse_args()
