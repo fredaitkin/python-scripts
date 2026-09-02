@@ -63,10 +63,21 @@ def main():
 
         if args.div:
             div_content = extract_article_body_div(content)
-            if not div_content:
+            comment_divs = extract_comment_div(content)
+
+            if not div_content and not comment_divs:
                 print("No matching div found for schema:articleBody.")
                 return
-            content = div_content
+
+            combined_parts = []
+            if div_content:
+                combined_parts.append(div_content)
+
+            for comment_div in comment_divs:
+                if comment_div != div_content:
+                    combined_parts.append(comment_div)
+
+            content = "\n\n".join(combined_parts)
 
         if args.debug_id:
             debug_div = extract_div_by_id(content, args.debug_id)
@@ -382,6 +393,59 @@ class DivByIdParser(HTMLParser):
             self.found_html_parts.append(f"&#{name};")
 
 
+class DivsByIdSubstringParser(HTMLParser):
+    """Parse HTML and extract all divs whose id contains a target substring."""
+
+    def __init__(self, target_substring):
+        super().__init__()
+        self.target_substring = target_substring
+        self.results = []
+        self.in_target_div = False
+        self.target_depth = 0
+        self.current_html_parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if self.in_target_div:
+            self.target_depth += 1
+            self.current_html_parts.append(self.get_starttag_text())
+            return
+
+        if tag.lower() == "div":
+            for attr_name, value in attrs:
+                if attr_name == "id" and self.target_substring in (value or ""):
+                    self.in_target_div = True
+                    self.target_depth = 1
+                    self.current_html_parts = [self.get_starttag_text()]
+                    break
+
+    def handle_endtag(self, tag):
+        if not self.in_target_div:
+            return
+
+        self.current_html_parts.append(f"</{tag}>")
+        self.target_depth -= 1
+        if self.target_depth == 0:
+            self.results.append("".join(self.current_html_parts))
+            self.in_target_div = False
+            self.current_html_parts = []
+
+    def handle_data(self, data):
+        if self.in_target_div:
+            self.current_html_parts.append(data)
+
+    def handle_entityref(self, name):
+        if self.in_target_div:
+            self.current_html_parts.append(f"&{name};")
+
+    def handle_charref(self, name):
+        if self.in_target_div:
+            self.current_html_parts.append(f"&#{name};")
+
+    def handle_startendtag(self, tag, attrs):
+        if self.in_target_div:
+            self.current_html_parts.append(self.get_starttag_text())
+
+
 def extract_article_body_div(content):
     """Return the first div with property="schema:articleBody"."""
     parser = ArticleBodyDivParser()
@@ -396,6 +460,14 @@ def extract_div_by_id(content, target_id):
     parser.feed(content)
     parser.close()
     return parser.result
+
+
+def extract_comment_div(content):
+    """Return all div blocks whose id contains 'post-rtjson-content'."""
+    parser = DivsByIdSubstringParser("post-rtjson-content")
+    parser.feed(content)
+    parser.close()
+    return parser.results
 
 
 if __name__ == "__main__":
