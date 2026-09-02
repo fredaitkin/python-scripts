@@ -6,6 +6,7 @@ Script to fetch and read website content.
 import argparse
 import json
 from html.parser import HTMLParser
+from html import unescape
 from urllib import request, error, parse
 
 
@@ -32,6 +33,18 @@ def main():
                         help="Extra wait time in milliseconds for JS-rendered pages in --playwright mode")
     parser.add_argument("--headed", action="store_true",
                         help="Run Playwright browser in headed mode (visible window)")
+    parser.add_argument("--scroll-to-bottom", action=argparse.BooleanOptionalAction, default=True,
+                        help="In --playwright mode, auto-scroll to load more lazy comments. Default: enabled")
+    parser.add_argument("--max-scroll-steps", type=int, default=30,
+                        help="Maximum auto-scroll passes in --playwright mode")
+    parser.add_argument("--scroll-pause-ms", type=int, default=1200,
+                        help="Pause in milliseconds between auto-scroll passes")
+    parser.add_argument("--expand-comments", action=argparse.BooleanOptionalAction, default=True,
+                        help="In --playwright mode, click 'View more comments' where available. Default: enabled")
+    parser.add_argument("--max-comment-clicks", type=int, default=120,
+                        help="Maximum number of 'View more comments' button clicks in --playwright mode")
+    parser.add_argument("--clean-text", action="store_true",
+                        help="Convert extracted HTML content to readable plain text")
     parser.add_argument("--preview", "-p", type=int, default=1000,
                         help="Number of characters to print to console")
     args = parser.parse_args()
@@ -54,6 +67,11 @@ def main():
                 args.url,
                 wait_ms=max(args.wait_ms, 0),
                 headless=not args.headed,
+                scroll_to_bottom=args.scroll_to_bottom,
+                max_scroll_steps=max(args.max_scroll_steps, 0),
+                scroll_pause_ms=max(args.scroll_pause_ms, 0),
+                expand_comments=args.expand_comments,
+                max_comment_clicks=max(args.max_comment_clicks, 0),
             )
         else:
             content = fetch_website(args.url)
@@ -95,6 +113,9 @@ def main():
             print(f"Debug: found div with id '{args.debug_id}'.")
             content = debug_div
 
+    if args.clean_text:
+        content = html_to_clean_text(content)
+
     if args.output:
         try:
             with open(args.output, "w", encoding="utf-8") as file:
@@ -129,7 +150,16 @@ def fetch_website(url, timeout=10):
     return None
 
 
-def fetch_website_playwright(url, wait_ms=3000, headless=True):
+def fetch_website_playwright(
+    url,
+    wait_ms=3000,
+    headless=True,
+    scroll_to_bottom=True,
+    max_scroll_steps=30,
+    scroll_pause_ms=1200,
+    expand_comments=True,
+    max_comment_clicks=120,
+):
     """Fetch website content in a browser context and return the rendered HTML."""
     try:
         from playwright.sync_api import sync_playwright
@@ -152,6 +182,30 @@ def fetch_website_playwright(url, wait_ms=3000, headless=True):
             except Exception:
                 pass
 
+            if expand_comments and max_comment_clicks > 0:
+                clicked = click_view_more_comments(
+                    page,
+                    max_clicks=max_comment_clicks,
+                    pause_ms=max(scroll_pause_ms, 300),
+                )
+                if clicked > 0:
+                    print(f"Clicked 'View more comments' {clicked} time(s).")
+
+            if scroll_to_bottom and max_scroll_steps > 0:
+                auto_scroll_page(page, max_scroll_steps=max_scroll_steps, pause_ms=scroll_pause_ms)
+                if expand_comments and max_comment_clicks > 0:
+                    clicked_after_scroll = click_view_more_comments(
+                        page,
+                        max_clicks=max_comment_clicks,
+                        pause_ms=max(scroll_pause_ms, 300),
+                    )
+                    if clicked_after_scroll > 0:
+                        print(f"Clicked 'View more comments' {clicked_after_scroll} additional time(s) after scrolling.")
+                try:
+                    page.wait_for_load_state("networkidle", timeout=10000)
+                except Exception:
+                    pass
+
             final_url = page.url
             if final_url != url:
                 print(f"Playwright final URL: {final_url}")
@@ -163,6 +217,71 @@ def fetch_website_playwright(url, wait_ms=3000, headless=True):
     except Exception as err:
         print(f"Playwright error: {err}")
         return None
+
+
+def auto_scroll_page(page, max_scroll_steps=30, pause_ms=1200):
+    """Scroll down repeatedly to trigger lazy-loading content."""
+    last_height = 0
+    stable_passes = 0
+
+    for _ in range(max_scroll_steps):
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_timeout(pause_ms)
+        new_height = page.evaluate("document.body.scrollHeight")
+
+        if new_height == last_height:
+            stable_passes += 1
+        else:
+            stable_passes = 0
+            last_height = new_height
+
+        if stable_passes >= 2:
+            break
+
+
+def click_view_more_comments(page, max_clicks=120, pause_ms=1200):
+    """Click visible 'View more comments' controls repeatedly to expand comment threads."""
+    total_clicks = 0
+
+    for _ in range(max_clicks):
+        clicked_this_pass = False
+
+        selectors = [
+            "button:has-text('View more comments')",
+            "a:has-text('View more comments')",
+            "[role='button']:has-text('View more comments')",
+        ]
+
+        for selector in selectors:
+            locator = page.locator(selector)
+            count = locator.count()
+            if count == 0:
+                continue
+
+            for index in range(count):
+                try:
+                    candidate = locator.nth(index)
+                    if not candidate.is_visible():
+                        continue
+                    candidate.scroll_into_view_if_needed(timeout=2000)
+                    candidate.click(timeout=3000)
+                    total_clicks += 1
+                    clicked_this_pass = True
+                    page.wait_for_timeout(pause_ms)
+                    break
+                except Exception:
+                    continue
+
+            if clicked_this_pass:
+                break
+
+        if not clicked_this_pass:
+            break
+
+        page.evaluate("window.scrollBy(0, 600)")
+        page.wait_for_timeout(300)
+
+    return total_clicks
 
 
 def build_reddit_json_urls(url):
@@ -468,6 +587,60 @@ def extract_comment_div(content):
     parser.feed(content)
     parser.close()
     return parser.results
+
+
+class HtmlToTextParser(HTMLParser):
+    """Convert HTML markup to readable plain text."""
+
+    def __init__(self):
+        super().__init__()
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in {"br", "hr"}:
+            self.parts.append("\n")
+        elif tag in {"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6"}:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in {"p", "div", "li", "section", "article", "ul", "ol"}:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if data:
+            self.parts.append(data)
+
+    def handle_entityref(self, name):
+        self.parts.append(unescape(f"&{name};"))
+
+    def handle_charref(self, name):
+        self.parts.append(unescape(f"&#{name};"))
+
+    def get_text(self):
+        return "".join(self.parts)
+
+
+def html_to_clean_text(content):
+    """Strip HTML tags and normalize spacing for readability."""
+    parser = HtmlToTextParser()
+    parser.feed(content)
+    parser.close()
+
+    text = parser.get_text().replace("\r", "")
+    lines = [line.strip() for line in text.split("\n")]
+
+    cleaned_lines = []
+    previous_blank = False
+    for line in lines:
+        if not line:
+            if not previous_blank:
+                cleaned_lines.append("")
+            previous_blank = True
+        else:
+            cleaned_lines.append(line)
+            previous_blank = False
+
+    return "\n".join(cleaned_lines).strip()
 
 
 if __name__ == "__main__":
