@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""
+Script to convert text into an audio file using text-to-speech.
+
+Supports two engines:
+- pyttsx3: offline synthesis (typically writes WAV reliably)
+- gTTS: online synthesis via Google TTS (writes MP3)
+"""
+
+import argparse
+import os
+import sys
+
+
+def load_text(direct_text=None, input_file=None):
+    """Load text from --text or --input-file."""
+    if direct_text and input_file:
+        print("Error: Provide either --text or --input-file, not both.")
+        return None
+
+    if direct_text:
+        text = direct_text.strip()
+        if not text:
+            print("Error: --text cannot be empty.")
+            return None
+        return text
+
+    if input_file:
+        if not os.path.exists(input_file):
+            print(f"Error: Input file not found: {input_file}")
+            return None
+        try:
+            with open(input_file, "r", encoding="utf-8") as file:
+                text = file.read().strip()
+            if not text:
+                print(f"Error: Input file is empty: {input_file}")
+                return None
+            return text
+        except OSError as err:
+            print(f"Error reading input file: {err}")
+            return None
+
+    print("Error: You must provide --text or --input-file.")
+    return None
+
+
+def synthesize_with_pyttsx3(text, output_file, rate=180, volume=1.0, auto_audio=False):
+    """Convert text to speech using pyttsx3 (offline)."""
+    try:
+        import pyttsx3
+    except ImportError:
+        print("pyttsx3 is not installed. Install with: pip install pyttsx3")
+        return False
+
+    try:
+        engine = pyttsx3.init()
+        engine.setProperty("rate", rate)
+        engine.setProperty("volume", volume)
+        if auto_audio:
+            engine.say(text)
+        else:
+            engine.save_to_file(text, output_file)
+        engine.runAndWait()
+        return True
+    except Exception as err:
+        print(f"pyttsx3 error: {err}")
+        return False
+
+
+def synthesize_with_gtts(text, output_file, lang="en"):
+    """Convert text to speech using gTTS (online)."""
+    try:
+        from gtts import gTTS
+    except ImportError:
+        print("gTTS is not installed. Install with: pip install gTTS")
+        return False
+
+    try:
+        tts = gTTS(text=text, lang=lang)
+        tts.save(output_file)
+        return True
+    except Exception as err:
+        print(f"gTTS error: {err}")
+        return False
+
+
+def play_audio_file(output_file):
+    """Play an audio file with the system default player."""
+    try:
+        os.startfile(output_file)
+        return True
+    except OSError as err:
+        print(f"Could not auto-play file: {err}")
+        return False
+
+
+def main():
+    """Main function."""
+    parser = argparse.ArgumentParser(description="Convert text to audio")
+    parser.add_argument("--text", default=None,
+                        help="Text to convert to speech")
+    parser.add_argument("--input-file", "-i", default=None,
+                        help="Path to a UTF-8 text file")
+    parser.add_argument("--output", "-o", default="output.wav",
+                        help="Output audio file path (e.g., output.wav or output.mp3)")
+    parser.add_argument("--engine", choices=["pyttsx3", "gtts"], default="pyttsx3",
+                        help="TTS engine to use")
+    parser.add_argument("--rate", type=int, default=180,
+                        help="Speech rate for pyttsx3")
+    parser.add_argument("--volume", type=float, default=1.0,
+                        help="Volume for pyttsx3 (0.0 to 1.0)")
+    parser.add_argument("--lang", default="en",
+                        help="Language code for gTTS (for example: en, es, fr)")
+    parser.add_argument("--auto-audio", action=argparse.BooleanOptionalAction, default=True,
+                        help="Play audio automatically after synthesis. Default: enabled")
+    args = parser.parse_args()
+
+    output_file = args.output
+    if args.engine == "gtts" and output_file == "output.wav":
+        output_file = "output.mp3"
+
+    text = load_text(direct_text=args.text, input_file=args.input_file)
+    if text is None:
+        sys.exit(1)
+
+    if args.engine == "pyttsx3":
+        success = synthesize_with_pyttsx3(
+            text=text,
+            output_file=output_file,
+            rate=args.rate,
+            volume=max(0.0, min(args.volume, 1.0)),
+            auto_audio=args.auto_audio,
+        )
+    else:
+        success = synthesize_with_gtts(
+            text=text,
+            output_file=output_file,
+            lang=args.lang,
+        )
+        if success and args.auto_audio:
+            play_audio_file(output_file)
+
+    if not success:
+        sys.exit(1)
+
+    if args.auto_audio:
+        if args.engine == "pyttsx3":
+            print("Audio played through speakers.")
+        else:
+            print(f"Audio saved to {output_file} and opened for playback.")
+    else:
+        print(f"Audio saved to {output_file}")
+
+
+if __name__ == "__main__":
+    main()
