@@ -38,6 +38,8 @@ def main():
                         help="Play audio automatically after synthesis. Default: enabled")
     parser.add_argument("--termux-timeout", type=float, default=None,
                         help="Optional seconds before force-stopping termux-tts-speak")
+    parser.add_argument("--termux-sentence-pause", type=float, default=0.03,
+                        help="Seconds to pause between Termux sentence dispatches (lower is faster)")
     args = parser.parse_args()
 
     output_file = args.output
@@ -70,6 +72,7 @@ def main():
             rate=args.rate,
             lang=args.lang,
             timeout_seconds=args.termux_timeout,
+            sentence_pause_seconds=max(0.0, args.termux_sentence_pause),
         )
 
     if not success:
@@ -183,17 +186,6 @@ def stop_termux_audio():
         pass
 
 
-def estimate_termux_speech_seconds(text, rate):
-    """Estimate how long Termux TTS might keep speaking."""
-    words = len(text.split())
-    if words == 0:
-        return 1.0
-
-    safe_rate = max(80.0, float(rate) if rate is not None else 180.0)
-    # Add a small pad because TTS startup/pauses vary across devices.
-    return max(1.0, (words / safe_rate) * 60.0 + 2.0)
-
-
 def split_text_into_sentences(text):
     """Split text into sentence-like chunks for incremental TTS playback."""
     chunks = re.split(r"(?<=[.!?])\s+", text.strip())
@@ -201,7 +193,7 @@ def split_text_into_sentences(text):
     return sentences if sentences else ([text.strip()] if text.strip() else [])
 
 
-def termux_speak(text, rate=180, lang="en", timeout_seconds=None):
+def termux_speak(text, rate=180, lang="en", timeout_seconds=None, sentence_pause_seconds=0.03):
     """Speak text using Termux TTS (termux-tts-speak)."""
     previous_sigint_handler = signal.getsignal(signal.SIGINT)
 
@@ -236,19 +228,8 @@ def termux_speak(text, rate=180, lang="en", timeout_seconds=None):
             command = base_command + [sentence]
             subprocess.run(command, check=True)
 
-            # termux-tts-speak may return before playback finishes, so pause between chunks.
-            wait_seconds = estimate_termux_speech_seconds(sentence, rate)
-            if timeout_enabled:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    stop_termux_audio()
-                    print("termux-tts-speak was stopped after reaching timeout.")
-                    return False
-                wait_seconds = min(wait_seconds, remaining)
-
-            wait_until = time.monotonic() + wait_seconds
-            while time.monotonic() < wait_until:
-                time.sleep(0.15)
+            if sentence_pause_seconds > 0:
+                time.sleep(sentence_pause_seconds)
 
         return True
     except FileNotFoundError:
