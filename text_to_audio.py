@@ -10,6 +10,7 @@ Supports three engines:
 
 import argparse
 import os
+import signal
 import subprocess
 import sys
 
@@ -165,10 +166,27 @@ def play_audio_file(output_file):
         return False
 
 
+def stop_termux_audio():
+    """Attempt to stop ongoing Termux speech playback."""
+    try:
+        subprocess.run(["termux-tts-stop"], check=False)
+    except FileNotFoundError:
+        # Not running in Termux or command is unavailable.
+        pass
+
+
 def termux_speak(text, rate=180, lang="en", timeout_seconds=None):
     """Speak text using Termux TTS (termux-tts-speak)."""
     process = None
+    previous_sigint_handler = signal.getsignal(signal.SIGINT)
+
+    def _handle_sigint(signum, frame):
+        stop_termux_audio()
+        raise KeyboardInterrupt
+
     try:
+        signal.signal(signal.SIGINT, _handle_sigint)
+
         # termux-tts-speak is available in Termux on Android.
         command = ["termux-tts-speak"]
 
@@ -193,6 +211,7 @@ def termux_speak(text, rate=180, lang="en", timeout_seconds=None):
         if process is not None:
             process.terminate()
             process.wait()
+        stop_termux_audio()
         print("termux-tts-speak was stopped after reaching timeout.")
         return False
     except subprocess.CalledProcessError as err:
@@ -202,11 +221,14 @@ def termux_speak(text, rate=180, lang="en", timeout_seconds=None):
         if process is not None and process.poll() is None:
             process.terminate()
             process.wait()
+        stop_termux_audio()
         print("termux-tts-speak stopped by user.")
         return False
     except ValueError:
         print("Invalid rate value for termux engine.")
         return False
+    finally:
+        signal.signal(signal.SIGINT, previous_sigint_handler)
 
 
 if __name__ == "__main__":
