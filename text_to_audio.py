@@ -9,6 +9,7 @@ Supports two engines:
 
 import argparse
 import os
+import subprocess
 import sys
 
 
@@ -21,7 +22,7 @@ def main():
                         help="Path to a UTF-8 text file")
     parser.add_argument("--output", "-o", default="output.wav",
                         help="Output audio file path (e.g., output.wav or output.mp3)")
-    parser.add_argument("--engine", choices=["pyttsx3", "gtts"], default="pyttsx3",
+    parser.add_argument("--engine", choices=["pyttsx3", "gtts", "termux"], default="pyttsx3",
                         help="TTS engine to use")
     parser.add_argument("--rate", type=int, default=180,
                         help="Speech rate for pyttsx3")
@@ -49,7 +50,7 @@ def main():
             volume=max(0.0, min(args.volume, 1.0)),
             auto_audio=args.auto_audio,
         )
-    else:
+    elif args.engine == "gtts":
         success = synthesize_with_gtts(
             text=text,
             output_file=output_file,
@@ -57,6 +58,12 @@ def main():
         )
         if success and args.auto_audio:
             play_audio_file(output_file)
+    else:
+        success = termux_speak(
+            text=text,
+            rate=args.rate,
+            lang=args.lang,
+        )
 
     if not success:
         sys.exit(1)
@@ -149,6 +156,34 @@ def play_audio_file(output_file):
         return True
     except OSError as err:
         print(f"Could not auto-play file: {err}")
+        return False
+
+
+def termux_speak(text, rate=180, lang="en"):
+    """Speak text using Termux TTS (termux-tts-speak)."""
+    try:
+        # termux-tts-speak is available in Termux on Android.
+        command = ["termux-tts-speak"]
+
+        if lang:
+            command.extend(["-l", str(lang)])
+
+        # Convert pyttsx3-like rate to a termux-compatible float range.
+        if rate is not None:
+            normalized_rate = max(0.1, min(float(rate) / 180.0, 2.0))
+            command.extend(["-r", f"{normalized_rate:.2f}"])
+
+        command.append(text)
+        subprocess.run(command, check=True)
+        return True
+    except FileNotFoundError:
+        print("termux-tts-speak not found. This engine requires Termux on Android.")
+        return False
+    except subprocess.CalledProcessError as err:
+        print(f"termux-tts-speak failed: {err}")
+        return False
+    except ValueError:
+        print("Invalid rate value for termux engine.")
         return False
 
 
