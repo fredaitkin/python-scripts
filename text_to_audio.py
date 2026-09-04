@@ -33,6 +33,8 @@ def main():
                         help="Language code for gTTS (for example: en, es, fr)")
     parser.add_argument("--auto-audio", action=argparse.BooleanOptionalAction, default=True,
                         help="Play audio automatically after synthesis. Default: enabled")
+    parser.add_argument("--termux-timeout", type=float, default=None,
+                        help="Optional seconds before force-stopping termux-tts-speak")
     args = parser.parse_args()
 
     output_file = args.output
@@ -64,6 +66,7 @@ def main():
             text=text,
             rate=args.rate,
             lang=args.lang,
+            timeout_seconds=args.termux_timeout,
         )
 
     if not success:
@@ -162,8 +165,9 @@ def play_audio_file(output_file):
         return False
 
 
-def termux_speak(text, rate=180, lang="en"):
+def termux_speak(text, rate=180, lang="en", timeout_seconds=None):
     """Speak text using Termux TTS (termux-tts-speak)."""
+    process = None
     try:
         # termux-tts-speak is available in Termux on Android.
         command = ["termux-tts-speak"]
@@ -177,13 +181,28 @@ def termux_speak(text, rate=180, lang="en"):
             command.extend(["-r", f"{normalized_rate:.2f}"])
 
         command.append(text)
-        subprocess.run(command, check=True)
+        process = subprocess.Popen(command)
+        process.wait(timeout=timeout_seconds)
+        if process.returncode != 0:
+            raise subprocess.CalledProcessError(process.returncode, command)
         return True
     except FileNotFoundError:
         print("termux-tts-speak not found. This engine requires Termux on Android.")
         return False
+    except subprocess.TimeoutExpired:
+        if process is not None:
+            process.terminate()
+            process.wait()
+        print("termux-tts-speak was stopped after reaching timeout.")
+        return False
     except subprocess.CalledProcessError as err:
         print(f"termux-tts-speak failed: {err}")
+        return False
+    except KeyboardInterrupt:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            process.wait()
+        print("termux-tts-speak stopped by user.")
         return False
     except ValueError:
         print("Invalid rate value for termux engine.")
