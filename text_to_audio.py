@@ -13,6 +13,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 
 
 def main():
@@ -181,6 +182,17 @@ def stop_termux_audio():
         pass
 
 
+def estimate_termux_speech_seconds(text, rate):
+    """Estimate how long Termux TTS might keep speaking."""
+    words = len(text.split())
+    if words == 0:
+        return 1.0
+
+    safe_rate = max(80.0, float(rate) if rate is not None else 180.0)
+    # Add a small pad because TTS startup/pauses vary across devices.
+    return max(1.0, (words / safe_rate) * 60.0 + 2.0)
+
+
 def termux_speak(text, rate=180, lang="en", timeout_seconds=None):
     """Speak text using Termux TTS (termux-tts-speak)."""
     previous_sigint_handler = signal.getsignal(signal.SIGINT)
@@ -217,6 +229,21 @@ def termux_speak(text, rate=180, lang="en", timeout_seconds=None):
 
         if process.returncode not in (0, None):
             raise subprocess.CalledProcessError(process.returncode, command)
+
+        # termux-tts-speak can return before Android finishes speaking.
+        # Keep this process alive so Ctrl+C can still stop active playback.
+        wait_seconds = estimate_termux_speech_seconds(text, rate)
+        if timeout_seconds is not None and timeout_seconds > 0:
+            wait_seconds = min(wait_seconds, float(timeout_seconds))
+
+        end_time = time.monotonic() + wait_seconds
+        while time.monotonic() < end_time:
+            time.sleep(0.2)
+
+        if timeout_seconds is not None and timeout_seconds > 0:
+            stop_termux_audio()
+            print("termux-tts-speak was stopped after reaching timeout.")
+            return False
 
         return True
     except FileNotFoundError:
