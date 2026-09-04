@@ -61,6 +61,7 @@ def main():
     else:
         success = termux_speak(
             text=text,
+            output_file=output_file,
             rate=args.rate,
             lang=args.lang,
         )
@@ -71,6 +72,8 @@ def main():
     if args.auto_audio:
         if args.engine == "pyttsx3":
             print("Audio played through speakers.")
+        elif args.engine == "termux":
+            print("Audio played through Termux.")
         else:
             print(f"Audio saved to {output_file} and opened for playback.")
     else:
@@ -159,7 +162,7 @@ def play_audio_file(output_file):
         return False
 
 
-def termux_speak(text, rate=180, lang="en"):
+def termux_speak(text, output_file, rate=180, lang="en"):
     """Speak text using Termux TTS (termux-tts-speak)."""
     try:
         # termux-tts-speak is available in Termux on Android.
@@ -173,7 +176,10 @@ def termux_speak(text, rate=180, lang="en"):
             normalized_rate = max(0.1, min(float(rate) / 180.0, 2.0))
             command.extend(["-r", f"{normalized_rate:.2f}"])
 
-        command.append(text)
+        if output_file and os.path.exists(output_file):
+            command.append(output_file)
+        else:
+            command.append(text)
         subprocess.run(command, check=True)
         return True
     except FileNotFoundError:
