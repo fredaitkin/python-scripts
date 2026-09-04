@@ -2,9 +2,10 @@
 """
 Script to convert text into an audio file using text-to-speech.
 
-Supports two engines:
+Supports three engines:
 - pyttsx3: offline synthesis (typically writes WAV reliably)
 - gTTS: online synthesis via Google TTS (writes MP3)
+- termux: uses Termux's text-to-speech capabilities on Android
 """
 
 import argparse
@@ -61,7 +62,6 @@ def main():
     else:
         success = termux_speak(
             text=text,
-            output_file=output_file,
             rate=args.rate,
             lang=args.lang,
         )
@@ -162,7 +162,7 @@ def play_audio_file(output_file):
         return False
 
 
-def termux_speak(text, output_file, rate=180, lang="en"):
+def termux_speak(text, rate=180, lang="en"):
     """Speak text using Termux TTS (termux-tts-speak)."""
     try:
         # termux-tts-speak is available in Termux on Android.
@@ -176,10 +176,7 @@ def termux_speak(text, output_file, rate=180, lang="en"):
             normalized_rate = max(0.1, min(float(rate) / 180.0, 2.0))
             command.extend(["-r", f"{normalized_rate:.2f}"])
 
-        if output_file and os.path.exists(output_file):
-            command.append(output_file)
-        else:
-            command.append(text)
+        command.append(text)
         subprocess.run(command, check=True)
         return True
     except FileNotFoundError:
