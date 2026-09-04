@@ -13,7 +13,6 @@ import os
 import signal
 import subprocess
 import sys
-import time
 
 
 def main():
@@ -175,20 +174,17 @@ def stop_termux_audio():
         # Not running in Termux or command is unavailable.
         pass
 
-
-def estimate_termux_speech_seconds(text, rate):
-    """Estimate how long speech playback may take."""
-    words = len(text.split())
-    if words == 0:
-        return 1.0
-
-    safe_rate = max(80.0, float(rate) if rate is not None else 180.0)
-    return max(1.0, (words / safe_rate) * 60.0 + 1.5)
+    # Some devices keep speech in the Termux API bridge process buffer.
+    try:
+        subprocess.run(["pkill", "-f", "termux-api"], check=False)
+    except FileNotFoundError:
+        pass
 
 
 def termux_speak(text, rate=180, lang="en", timeout_seconds=None):
     """Speak text using Termux TTS (termux-tts-speak)."""
     previous_sigint_handler = signal.getsignal(signal.SIGINT)
+    process = None
 
     def _handle_sigint(signum, frame):
         stop_termux_audio()
@@ -208,31 +204,39 @@ def termux_speak(text, rate=180, lang="en", timeout_seconds=None):
             normalized_rate = max(0.1, min(float(rate) / 180.0, 2.0))
             command.extend(["-r", f"{normalized_rate:.2f}"])
 
-        command.append(text)
-        subprocess.run(command, check=True)
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            text=True,
+        )
 
-        wait_seconds = timeout_seconds
-        timed_cutoff = wait_seconds is not None and wait_seconds > 0
-        if wait_seconds is None:
-            wait_seconds = estimate_termux_speech_seconds(text, rate)
+        process.communicate(
+            input=text,
+            timeout=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
+        )
 
-        end_time = time.monotonic() + max(0.0, float(wait_seconds))
-        while time.monotonic() < end_time:
-            time.sleep(0.2)
-
-        if timed_cutoff:
-            stop_termux_audio()
-            print("termux-tts-speak was stopped after reaching timeout.")
-            return False
+        if process.returncode not in (0, None):
+            raise subprocess.CalledProcessError(process.returncode, command)
 
         return True
     except FileNotFoundError:
         print("termux-tts-speak not found. This engine requires Termux on Android.")
         return False
+    except subprocess.TimeoutExpired:
+        if process is not None:
+            process.kill()
+        stop_termux_audio()
+        print("termux-tts-speak was stopped after reaching timeout.")
+        return False
     except subprocess.CalledProcessError as err:
+        if err.returncode in (-signal.SIGTERM, signal.SIGTERM, 143):
+            print("termux-tts-speak was stopped (SIGTERM).")
+            return False
         print(f"termux-tts-speak failed: {err}")
         return False
     except KeyboardInterrupt:
+        if process is not None:
+            process.kill()
         stop_termux_audio()
         print("termux-tts-speak stopped by user.")
         return False
